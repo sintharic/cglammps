@@ -1326,11 +1326,12 @@ void FixBondReact::superimpose_algorithm()
       if (glove_counter == onemol->natoms) {
         tagint local_atom1 = atom->map(glove[myibonding-1][1]);
         tagint local_atom2 = atom->map(glove[myjbonding-1][1]);
-        if ( (nxspecial[local_atom1][0] == onemol_nxspecial[myibonding-1][0] &&
-              nxspecial[local_atom2][0] == nxspecial[local_atom1][0]) &&
-             (nxspecial[local_atom1][0] == 0 ||
-              xspecial[local_atom1][0] == atom->tag[local_atom2]) &&
-             check_constraints()) {
+        // NOTE: simplified for coarse-grained model - only checks for matching initiator atoms
+        //if ( (nxspecial[local_atom1][0] == onemol_nxspecial[myibonding-1][0] &&
+        //      nxspecial[local_atom2][0] == nxspecial[local_atom1][0]) &&
+        //     (nxspecial[local_atom1][0] == 0 ||
+        //      xspecial[local_atom1][0] == atom->tag[local_atom2]) &&
+        if (check_constraints()) {
           if (fraction[rxnID] < 1.0 &&
               random[rxnID]->uniform() >= fraction[rxnID]) {
             status = REJECT;
@@ -2531,6 +2532,14 @@ void FixBondReact::get_molxspecials()
 
 void FixBondReact::find_landlocked_atoms(int myrxn)
 {
+  // NOTE: simplified for coarse-grained model
+  // removed all checks for reaction templates, allowed edge atom to be landlocked
+  for (int i = 0; i < twomol->natoms; i++) {
+    landlocked_atoms[i][myrxn] = 0;
+  }
+  return;
+
+
   // landlocked_atoms are atoms for which all topology is contained in reacted template
   // if dihedrals/impropers exist: this means that edge atoms are not in their 1-3 neighbor list
   //   note: due to various usage/definitions of impropers, treated same as dihedrals
@@ -3087,6 +3096,12 @@ void FixBondReact::update_everything()
 
     if (update_num_mega == 0) continue;
 
+    if (pass == 0 || comm->me == 0)
+      for (int i = 0; i < update_num_mega; i++) {
+        rxnID = (int) update_mega_glove[0][i];
+        //printf("reacted_atom_IDs: %s %d %d\n",rxn_name[rxnID],update_mega_glove[ibonding[rxnID]][i],update_mega_glove[jbonding[rxnID]][i]);
+      }
+
     // if inserted atoms and global map exists, reset map now instead
     //   of waiting for comm since other pre-exchange fixes may use it
     // invoke map_init() b/c atom count has grown
@@ -3136,7 +3151,7 @@ void FixBondReact::update_everything()
           if (stabilization_flag == 1) i_statted_tags[ilocal] = 0;
           i_react_tags[ilocal] = rxnID;
 
-          if (landlocked_atoms[j][rxnID] == 1)
+          //if (landlocked_atoms[j][rxnID] == 1)
             type[ilocal] = twomol->type[j];
           if (twomol->qflag && atom->q_flag && custom_charges[jj][rxnID] == 1) {
             double *q = atom->q;
@@ -3145,6 +3160,8 @@ void FixBondReact::update_everything()
         }
       }
     }
+
+
 
     int insert_num;
     // very nice and easy to completely overwrite special bond info for landlocked atoms
@@ -3156,17 +3173,17 @@ void FixBondReact::update_everything()
         int jj = equivalences[j][1][rxnID]-1;
         int ilocal = atom->map(update_mega_glove[jj+1][i]);
         if (ilocal < nlocal && ilocal >= 0) {
-          if (landlocked_atoms[j][rxnID] == 1) {
-            for (int k = 0; k < 3; k++) {
-              nspecial[ilocal][k] = twomol->nspecial[j][k];
-            }
-            for (int p = 0; p < twomol->nspecial[j][2]; p++) {
-              special[ilocal][p] = update_mega_glove[equivalences[twomol->special[j][p]-1][1][rxnID]][i];
-            }
-          }
+          //if (landlocked_atoms[j][rxnID] == 1) {
+          //  for (int k = 0; k < 3; k++) {
+          //    nspecial[ilocal][k] = twomol->nspecial[j][k];
+          //  }
+          //  for (int p = 0; p < twomol->nspecial[j][2]; p++) {
+          //    special[ilocal][p] = update_mega_glove[equivalences[twomol->special[j][p]-1][1][rxnID]][i];
+          //  }
+          //}
           // now delete and replace landlocked atoms from non-landlocked atoms' special info
           // delete 1-2, 1-3, 1-4 specials individually. only delete if special exists in pre-reaction template
-          if (landlocked_atoms[j][rxnID] == 0) {
+          if (1==1) { //landlocked_atoms[j][rxnID] == 0) {
             int ispec, fspec, imolspec, fmolspec, nspecdel[3];
             for (int k = 0; k < 3; k++) nspecdel[k] = 0;
             for (int k = 0; k < atom->maxspecial; k++) delflag[k] = 0;
@@ -3232,23 +3249,23 @@ void FixBondReact::update_everything()
       for (int j = 0; j < twomol->natoms; j++) {
         int jj = equivalences[j][1][rxnID]-1;
         if (atom->map(update_mega_glove[jj+1][i]) < nlocal && atom->map(update_mega_glove[jj+1][i]) >= 0) {
-          if (landlocked_atoms[j][rxnID] == 1) {
-            delta_bonds -= num_bond[atom->map(update_mega_glove[jj+1][i])];
-            // If deleting all bonds, first cache then remove all histories
-            if (n_histories > 0)
-              for (auto &ihistory: histories) {
-                for (int n = 0; n < num_bond[atom->map(update_mega_glove[jj+1][i])]; n++)
-                  dynamic_cast<FixBondHistory *>(ihistory)->cache_history(atom->map(update_mega_glove[jj+1][i]), n);
-                for (int n = 0; n < num_bond[atom->map(update_mega_glove[jj+1][i])]; n++)
-                  dynamic_cast<FixBondHistory *>(ihistory)->delete_history(atom->map(update_mega_glove[jj+1][i]), 0);
-              }
-            num_bond[atom->map(update_mega_glove[jj+1][i])] = 0;
-          }
-          if (landlocked_atoms[j][rxnID] == 0) {
+          //if (landlocked_atoms[j][rxnID] == 1) {
+          //  delta_bonds -= num_bond[atom->map(update_mega_glove[jj+1][i])];
+          //  // If deleting all bonds, first cache then remove all histories
+          //  if (n_histories > 0)
+          //    for (auto &ihistory: histories) {
+          //      for (int n = 0; n < num_bond[atom->map(update_mega_glove[jj+1][i])]; n++)
+          //        dynamic_cast<FixBondHistory *>(ihistory)->cache_history(atom->map(update_mega_glove[jj+1][i]), n);
+          //      for (int n = 0; n < num_bond[atom->map(update_mega_glove[jj+1][i])]; n++)
+          //        dynamic_cast<FixBondHistory *>(ihistory)->delete_history(atom->map(update_mega_glove[jj+1][i]), 0);
+          //    }
+          //  num_bond[atom->map(update_mega_glove[jj+1][i])] = 0;
+          //}
+          if (1==1) { //landlocked_atoms[j][rxnID] == 0) {
             for (int p = num_bond[atom->map(update_mega_glove[jj+1][i])]-1; p > -1 ; p--) {
               for (int n = 0; n < twomol->natoms; n++) {
                 int nn = equivalences[n][1][rxnID]-1;
-                if (n!=j && bond_atom[atom->map(update_mega_glove[jj+1][i])][p] == update_mega_glove[nn+1][i] && landlocked_atoms[n][rxnID] == 1) {
+                if (n!=j && bond_atom[atom->map(update_mega_glove[jj+1][i])][p] == update_mega_glove[nn+1][i]) { //landlocked_atoms[n][rxnID] == 1
                   // Cache history information, shift history, then delete final element
                   if (n_histories > 0)
                     for (auto &ihistory: histories)
@@ -3276,21 +3293,21 @@ void FixBondReact::update_everything()
       for (int j = 0; j < twomol->natoms; j++) {
         int jj = equivalences[j][1][rxnID]-1;
         if (atom->map(update_mega_glove[jj+1][i]) < nlocal && atom->map(update_mega_glove[jj+1][i]) >= 0) {
-          if (landlocked_atoms[j][rxnID] == 1)  {
-            num_bond[atom->map(update_mega_glove[jj+1][i])] = twomol->num_bond[j];
-            delta_bonds += twomol->num_bond[j];
+          //if (landlocked_atoms[j][rxnID] == 1)  {
+          //  num_bond[atom->map(update_mega_glove[jj+1][i])] = twomol->num_bond[j];
+          //  delta_bonds += twomol->num_bond[j];
+          //  for (int p = 0; p < twomol->num_bond[j]; p++) {
+          //    bond_type[atom->map(update_mega_glove[jj+1][i])][p] = twomol->bond_type[j][p];
+          //    bond_atom[atom->map(update_mega_glove[jj+1][i])][p] = update_mega_glove[equivalences[twomol->bond_atom[j][p]-1][1][rxnID]][i];
+          //    // Check cached history data to see if bond regenerated
+          //    if (n_histories > 0)
+          //      for (auto &ihistory: histories)
+          //        dynamic_cast<FixBondHistory *>(ihistory)->check_cache(atom->map(update_mega_glove[jj+1][i]), p);
+          //  }
+          //}
+          if (1==1) { //landlocked_atoms[j][rxnID] == 0) {
             for (int p = 0; p < twomol->num_bond[j]; p++) {
-              bond_type[atom->map(update_mega_glove[jj+1][i])][p] = twomol->bond_type[j][p];
-              bond_atom[atom->map(update_mega_glove[jj+1][i])][p] = update_mega_glove[equivalences[twomol->bond_atom[j][p]-1][1][rxnID]][i];
-              // Check cached history data to see if bond regenerated
-              if (n_histories > 0)
-                for (auto &ihistory: histories)
-                  dynamic_cast<FixBondHistory *>(ihistory)->check_cache(atom->map(update_mega_glove[jj+1][i]), p);
-            }
-          }
-          if (landlocked_atoms[j][rxnID] == 0) {
-            for (int p = 0; p < twomol->num_bond[j]; p++) {
-              if (landlocked_atoms[twomol->bond_atom[j][p]-1][rxnID] == 1) {
+              if (1==1) { //landlocked_atoms[twomol->bond_atom[j][p]-1][rxnID] == 1) {
                 insert_num = num_bond[atom->map(update_mega_glove[jj+1][i])];
                 bond_type[atom->map(update_mega_glove[jj+1][i])][insert_num] = twomol->bond_type[j][p];
                 bond_atom[atom->map(update_mega_glove[jj+1][i])][insert_num] = update_mega_glove[equivalences[twomol->bond_atom[j][p]-1][1][rxnID]][i];
@@ -3312,6 +3329,8 @@ void FixBondReact::update_everything()
     if (n_histories > 0)
       for (auto &ihistory: histories)
         dynamic_cast<FixBondHistory *>(ihistory)->clear_cache();
+
+    /*
 
     // Angles! First let's delete all angle info:
     if (force->angle) {
@@ -3561,6 +3580,8 @@ void FixBondReact::update_everything()
         }
       }
     }
+
+    */
 
   }
 
